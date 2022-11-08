@@ -1,0 +1,395 @@
+# -*- coding: utf-8 -*-
+"""
+Spyder Editor
+
+Code authored by James Ackroyd
+James@Jent.Dev
+
+This application has been written to collect grant data from a number of websites.
+This data is then outputted row by row to a CSV file and to a local database.
+
+This code requires the below imports, some of which require packages to be downloaded.
+Selenium can be installed using pip or conda install command.
+
+Also required:
+    chromedriver.exe must be downloaded -- update the file path in the code below
+    For the data to be written to the local SQL server you must have one operating on your machine.
+    You must also have the correct login information, root password, etc.
+    If you only want to use the CSV output, comment out the SQL write code.
+
+"""
+
+# Imports for the grant scraping functionality
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import NoSuchElementException
+
+#Import for the CSV file creation functionality
+from csv import writer
+
+# Imports used for writing the output to the local database
+#import pandas as pd
+import mysql.connector
+ 
+# Used to slow the program down for web page loading and code debugging
+import time
+
+print("Welcome to the grant scraper. We are now preparing the browser")
+option = webdriver.ChromeOptions()
+# These options below alter how the web browser is initialised
+#option.add_argument('--headless') # Prevents the browser from being displayed, good for running unobtrusively, bad for debugging the application
+option.add_argument('--incognito') # Starts browser in incognito mode
+option.add_argument('--start-maximized') # Start browser in a full screen window
+option.add_argument('--no-sandbox') # ... I don't know but was recommended...
+option.add_argument('--disable-dev-sh-usage') # ... I don't know but was recommended...
+
+# !!! ALERT !!! Update web_Driver_File_Path with your chromedriver.exe location
+web_Driver_File_Path = "C:/Users/james/Downloads/Uni/COMP3850 PACE/Project Files/chromedriver.exe"
+driver = webdriver.Chrome(web_Driver_File_Path, options=option)
+driver.implicitly_wait(5) # Sets the driver to repeatedly query the page object for 5 seconds or until object found.
+print("\nSuccess!!!\nBrowser initialised")
+
+# Navigating to the page and creating an object from it.
+page = driver.get('https://business.gov.au/grants-and-programs?resultsNum=50&cgs=fi131') # Getting page HTML through request
+
+# Open a CSV file for writing the data to.
+try:
+    print("\nCreating a CSV File titled 'BGA_Grants'")
+    file_BGA = open('BGA_Grants.csv', 'w', newline='') #argument removed due to encoding issue ', encoding='utf8''
+    write_Tool = writer(file_BGA)
+    # Setup the column names of the CSV file
+    header = ['grant_Title', 'grant_Details', 'grant_Link', 'more_details', 'intended_Recipient', 'amount']
+    write_Tool.writerow(header)
+    print("\nSuccess!!!\nCSV initialised")
+except:
+    print("\nFRIZZZZTTT... CSV initialisation failed!!!\nContinuing!")
+
+# Below is the code that initialises the local database connection
+print("\nEstablishing a connection to the local SQL server")
+cnx = mysql.connector.connect(
+    user = 'root',
+    password = 'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX - enter your root user password',
+    database = 'Grants', # This is also the schema
+    host = '127.0.0.1',
+    port = '3306')
+
+# And the cursor object
+cursor = cnx.cursor()
+
+# Database table needs to be dropped and recreated, to remove old data
+drop_BGA_Grants = '''
+    drop table if exists BGA_grants
+'''
+cursor.execute(drop_BGA_Grants)
+cnx.commit()
+
+create_BGA_Grants = '''
+    create table BGA_Grants(
+        grant_Title text,
+        grant_Details text,
+        grant_Link text,
+        more_details text,
+        intended_Recipient text,
+        amount text
+        )
+'''
+cursor.execute(create_BGA_Grants)
+cnx.commit()
+
+# Below is the SQL command inputing data into BGA_Grants table
+sql_insert = '''
+    INSERT INTO BGA_grants
+    VALUES (%s, %s, %s, %s, %s, %s)
+'''
+
+
+# Below is the function that pulls out the specific data elements or values from the page into the soup and,
+# writes the values to the CSV file
+def scrape_Page():
+    print("Waiting 3 seconds for the page elements to load...")
+    time.sleep(3) # Pauses program execution to wait for the dynamic web page elements to load.
+    
+    print("Page should be fully loaded. Begin the SCRAPE!!!")
+    soup = BeautifulSoup(driver.page_source, 'html.parser') # Parsing content using beautifulsoup
+    
+    print("Now we are finding all of the parent elements containing our target data...")
+    elements = soup.find_all('div', class_="search-card-result")
+
+    print("Searching for the grant specific information in each parent element...")
+    for element in elements:
+        # Find Each relevant value for a specific grant
+        grant_Title = element.find('p', class_="search-card-content-type CoveoFieldValue").text  
+        target_Element = element.find('a', class_="CoveoResultLink")
+        grant_Details =  target_Element.text
+        grant_Link = "https://business.gov.au" + target_Element['href']
+        more_details = element.find('div', class_="search-card-body body-copy").text
+        target_Element = element.findAll('div', class_="accordion-grant-content-description")
+        intended_Recipient = target_Element[0].text        
+        amount = target_Element[1].text        
+        # Save each found value into a list format ready for writing
+        next_Row = [grant_Title, grant_Details, grant_Link, more_details, intended_Recipient, amount]
+        # Write the created row to the CSV file
+        write_Tool.writerow(next_Row)
+        # Write the row to the local MySQL Database
+        cursor.execute(sql_insert, next_Row)
+        cnx.commit()
+       
+
+# Helper Function - check if an element exists return true or false
+def check_exists_by_css(driver, location):
+    try:
+        driver.find_element(By.CSS_SELECTOR, location)
+        print("\nHalelujah we found it!!!")
+    except NoSuchElementException:
+        print("\nNo next button found.\nFinalising this scrape.")
+        return False
+    return True
+
+print("\nScraping the first page...")
+scrape_Page()
+
+print("\nSearching for the next page button...")
+# CSS Selector for the next button
+next_CSS = "a[title='Next']"
+x = True
+i = 1
+while x == True:
+    x = check_exists_by_css(driver, next_CSS)
+    #print(x)
+    if x == False:
+        break
+    element = driver.find_element(By.CSS_SELECTOR, next_CSS)
+    driver.execute_script('arguments[0].scrollIntoView();', element)
+    time.sleep(3) # Pauses program execution to aid testing
+    driver.execute_script('window.scrollBy(0, -200);')
+    time.sleep(2) # Pauses program execution to aid testing
+    element.click() # Activates the next element
+    time.sleep(8) # Pauses program execution to aid testing
+    scrape_Page() # Page scraping function
+    print('\nNumber '+ str(i+1) +' page scraped')
+    i+=1
+
+print('\nFinished scraping all pages on this site')
+print('\nFinished writing all CSV rows... Closing the BGA_Grants CSV file')
+file_BGA.close()
+
+print('\nMoving to the next site to scrape')
+page = driver.get('https://www.grants.gov.au/Go/List') # Getting page HTML through request
+time.sleep(5) # Pause for web page to load
+
+# Open a CSV file for writing the data to.
+try:
+    print("\nCreating a CSV File titled 'GO_Grants'")
+    file_GO = open('GO_Grants.csv', 'w', newline='') #argument removed due to encoding issue ', encoding='utf8''
+    write_Tool = writer(file_GO)
+    # Setup the column names of the CSV file
+    header = ['grant_Title', 'closing_Date', 'grant_Details', 'grant_Link', 'agency', 'category']
+    write_Tool.writerow(header)
+    print("\nSuccess!!!\nCSV initialised")
+except:
+    print("\nFRIZZZZTTT... CSV initialisation failed!!!\nContinuing!")
+
+# Drop old table and create new table for GO_Grants
+drop_GO_Grants = '''
+    drop table if exists GO_Grants
+'''
+cursor.execute(drop_GO_Grants)
+cnx.commit()
+
+create_GO_Grants = '''
+    create table GO_Grants(
+        grant_Title text,
+        closing_Date text,
+        grant_Details text,
+        grant_Link text,
+        agency text,
+        category text        
+        )
+'''
+cursor.execute(create_GO_Grants)
+cnx.commit()
+
+# Below is the SQL command that inputs the data into the database
+sql_insert_2 = '''
+    INSERT INTO GO_grants
+    VALUES (%s, %s, %s, %s, %s, %s)
+'''
+
+# Below is the function that pulls out the specific data elements or values from the page into the soup and,
+# writes the values to the CSV file
+def scrape_Page_2():
+    print("Waiting 3 seconds for the page elements to load...")
+    time.sleep(3) # Pauses program execution to wait for the dynamic web page elements to load.
+    
+    print("Page should be fully loaded. Begin the SCRAPE!!!")
+    soup = BeautifulSoup(driver.page_source, 'html.parser') # Parsing content using beautifulsoup
+    print("Now we are finding all of the parent elements containing our target data...")
+    
+    elements = soup.find_all('div', class_="row boxEQH")
+    #print(elements)   #test Passed, elements are retrieved from site
+
+
+    print("Searching for the grant title in each parent element...")
+    for element in elements:
+        grant_Title = element.find('p', class_="font20").text
+        card_Elements = element.find_all('div', class_="list-desc-inner")        
+        closing_Date = card_Elements[1].text
+        closing_Date = ' '.join(closing_Date.split())
+        grant_Details = card_Elements[4].text
+        grant_Details = grant_Details.replace('\n', '')
+        grant_Link = "https://www.grants.gov.au" + card_Elements[5].find('a', class_="detail")['href']
+        agency = card_Elements[2].text
+        category = card_Elements[3].text        
+        # Save each found value into a list format ready for writing
+        next_Row = [grant_Title, closing_Date, grant_Details, grant_Link, agency, category]
+        # Write the created row to the CSV file
+        write_Tool.writerow(next_Row)
+        # Write the row to the local MySQL Database
+        cursor.execute(sql_insert_2, next_Row)
+        cnx.commit()
+
+print("\nScraping the first page...")
+scrape_Page_2()
+
+
+print("\nFind next button, scrape, repeat...")
+# CSS Selector for the next button
+next_CSS = "a[aria-label='Next Page']"
+#time.sleep(3) # Pauses program execution to aid testing
+x = True
+i = 1
+while x == True:
+    #time.sleep(5) # Pauses program execution to aid testing
+    x = check_exists_by_css(driver, next_CSS)
+    #print(x)
+    time.sleep(1.5) # Pauses program execution to aid testing
+    if x == False:
+        break
+    element = driver.find_element(By.CSS_SELECTOR, next_CSS)
+    driver.execute_script('arguments[0].scrollIntoView();', element)
+    time.sleep(2.5) # Pauses program execution to aid testing
+    driver.execute_script('window.scrollBy(0, -200);')
+    time.sleep(2.5) # Pauses program execution to aid testing
+    element.click() # Activates the next element
+    time.sleep(6) # Pauses program execution to aid testing
+    scrape_Page_2()
+    print('\nNumber '+ str(i+1) +' page scraped')
+
+    i+=1
+print('\nFinished scraping all pages')
+
+print('\nFinished writing all rows... Closing the GO_Grants CSV file')
+file_GO.close()
+
+
+print('\nMoving to the next site to scrape')
+page = driver.get('https://serviceproviders.dss.gov.au/?ppp=200') # Getting page HTML through request
+time.sleep(3) # Pause for web page to load
+
+# Open a CSV file for writing the data to.
+try:
+    print("\nCreating a CSV File titled 'DSS_Grants'")
+    file_DSS = open('DSS_Grants.csv', 'w', newline='') #argument removed due to encoding issue ', encoding='utf8''
+    write_Tool = writer(file_DSS)
+    # Setup the column names of the CSV file
+    header = ['organisation_Name', 'external_Link', 'state', 'region', 'category']
+    write_Tool.writerow(header)
+    print("\nSuccess!!!\nCSV initialised")
+except:
+    print("\nFRIZZZZTTT... CSV initialisation failed!!!\nContinuing!")
+
+# Drop old table and create new table for DSS_Grants
+drop_DSS_Grants = '''
+    drop table if exists DSS_Grants
+'''
+cursor.execute(drop_DSS_Grants)
+cnx.commit()
+
+create_DSS_Grants = '''
+    create table DSS_Grants(
+        organisation_Name text,
+        external_Link text,
+        state text,
+        region text,
+        category text        
+        )
+'''
+cursor.execute(create_DSS_Grants)
+cnx.commit()
+
+# Below is the SQL command that inputs the data into the database
+sql_insert_3 = '''
+    INSERT INTO DSS_grants
+    VALUES (%s, %s, %s, %s, %s)
+'''
+
+# Below is the function that pulls out the specific data elements or values from the page into the soup and,
+# writes the values to the CSV file
+def scrape_Page_3():
+    print("Waiting 1.5 seconds for the page elements to load...")
+    time.sleep(1.5) # Pauses program execution to wait for the dynamic web page elements to load.
+    
+    print("Page should be fully loaded. Begin the SCRAPE!!!")
+    soup = BeautifulSoup(driver.page_source, 'html.parser') # Parsing content using beautifulsoup
+    
+    print("Now we are finding all of the parent elements containing our target data...")
+    elements = soup.find_all('tr')
+    elements.pop(0)
+    elements.pop(0)
+    print("Searching for each required data field in each parent element...")
+    for element in elements:
+        #print(element)
+        organisation_Name = element.find('a').text
+        external_Link = element.find('a')['href']
+        external_Link = external_Link.replace('\n', '')
+        td_elements = element.find_all('td')
+        state = td_elements[0].text
+        region = td_elements[1].text
+        category = td_elements[3].text
+        # Save each found value into a list format ready for writing
+        next_Row = [organisation_Name, external_Link, state, region, category]
+        # Write the created row to the CSV file
+        write_Tool.writerow(next_Row)
+        # Write the row to the local MySQL Database
+        cursor.execute(sql_insert_3, next_Row)
+        cnx.commit()
+
+print("\nScraping the first page...")
+scrape_Page_3()
+
+print("\nFind next button, scrape, repeat...")
+# CSS Selector for the next button
+next_CSS = "span[aria-label='Go to next page']" # "span[aria-label='Go to next page']"  next_CSS = "a[aria-label='Next Page']"
+#time.sleep(3) # Pauses program execution to aid testing
+x = True
+i = 1
+while x == True:
+    #time.sleep(5) # Pauses program execution to aid testing
+    x = check_exists_by_css(driver, next_CSS)
+    #print(x)
+    #time.sleep(1.5) # Pauses program execution to aid testing
+    if x == False:
+        break
+    element = driver.find_element(By.CSS_SELECTOR, next_CSS)
+    #driver.execute_script('arguments[0].scrollIntoView();', element)
+    #time.sleep(1) # Pauses program execution to aid testing
+    #driver.execute_script('window.scrollBy(0, -200);')
+    #time.sleep(1) # Pauses program execution to aid testing
+    element.click() # Activates the next element
+    time.sleep(2) # Pauses program execution to aid page loading
+    scrape_Page_3()
+    print('\nNumber '+ str(i+1) +' page scraped')
+    i+=1
+    
+print('\nFinished scraping all pages')
+
+print('\nFinished writing all rows... Closing the DSS_Grants CSV file')
+file_DSS.close()
+
+print('\nFinished scraping all sites... Closing the browser')
+driver.quit()
+
+print('\nFinished updating all SQL rows... Closing the SQL server connection') 
+cursor.close()
+cnx.close()
