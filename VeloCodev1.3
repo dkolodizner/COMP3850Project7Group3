@@ -1,0 +1,133 @@
+//Updated code to correct search bar filtering issue - incorrectly displayed the results
+
+//code authored by Daniel Kolodizner
+
+import wixData from 'wix-data';
+import wixWindow from 'wix-window';
+
+//select your Australian state dropdown
+export function dataset1_ready(){
+    dropdownMenu1();
+}
+
+//dropdown menu functionality
+function dropdownMenu1(){
+    wixData.query("OfficialGrantsFromCSVImport")
+    .contains("state", String($w("#dropdown1").value))
+    .find()
+    .then(results => {
+        const uniqueTitles = getUniqueTitles(results.items);
+        $w("#dropdown1").options = buildOptions(uniqueTitles);
+        $w('#pagination1').currentPage;
+    });
+
+function getUniqueTitles(items){
+    const titlesOnly = items.map (items => items.state);
+    return [...new Set(titlesOnly)];
+}
+
+function buildOptions(uniqueList){
+    return uniqueList.map(curr =>{
+        return {label:curr, value:curr};
+    });
+}
+
+}
+
+//search button for dropdown
+export function searchButton_click(event) {
+	search();
+}
+
+//search button funcionality
+function search(){
+    $w("#clearSearch").hide();
+    wixData.query("OfficialGrantsFromCSVImport")
+    .contains("state", String($w("#dropdown1").value))
+    .find()
+    .then(results => {
+        $w("#repeater1").data = results.items;
+        $w("#dataset1").setFilter( wixData.filter().startsWith("state", String($w("#dropdown1").value)));
+        $w("#searchButton").hide();
+        $w("#resetButton").show();
+        $w("#resetButton").enable();
+        $w("#text15").show();
+        $w("#dataset1").getTotalCount() == $w('#repeater1').data.length;
+    })
+
+    wixData.query("OfficialGrantsFromCSVImport")
+    .contains("state", String($w("#dropdown1").value))
+    .count()
+    .then ( (num) => {
+        let numberOfItems = num;
+        $w("#text15").text = "Results: " + num;
+    })
+    ;
+}
+
+//reset button functionality
+export function resetButton_click(event) {
+    $w("#dataset1").setFilter(wixData.filter());
+    $w('#dropdown1').value = undefined;
+    $w('#resetButton').hide();
+    $w('#searchButton').show();
+    $w("#text15").hide();
+}
+
+//keyword search bar functionality
+let debounceTimer;
+
+export function searchBar_keyPress(event) {
+    $w("#clearSearch").show();
+	if (debounceTimer){
+        clearTimeout(debounceTimer);
+        debounceTimer = undefined;
+        $w("#text15").show();
+    }
+
+    debounceTimer = setTimeout(() => {
+        $w("#dataset1").setFilter(wixData.filter().contains("issuer", $w('#searchBar').value)
+        .or(wixData.filter().contains("state", $w('#searchBar').value)
+        .or(wixData.filter().contains("entityType", $w('#searchBar').value))
+        .or(wixData.filter().contains("targetAreaOfIssuer", $w("#searchBar").value))
+        .or(wixData.filter().contains("website", $w('#searchBar').value)))).then (() => {
+        count();
+        })
+        $w("#text15").show();
+    }, );
+
+    $w.onReady(() => {
+        $w('#clearSearch').onClick(() =>{
+            $w("#searchBar").value = undefined
+            $w("#dataset1").setFilter(wixData.filter())
+            $w('#clearSearch').hide();
+            $w("#text15").hide();
+        })
+    })
+}
+
+function count(){
+    let total = $w('#dataset1').getTotalCount();
+    if (total > 1) {
+        $w('#text15').text = "Results: " + total;
+        $w('#text15').show;
+    }
+
+    if (total == 1){
+        $w('#text15').text = "Results: " + total;
+        $w('#text15').show;
+    }
+
+    if (total == 0){
+        $w('#text15').text = "No results found";
+        $w('#text15').show;
+    }
+}
+
+//quick start help user guide
+export function helpButton_click(event) {
+	$w("#helpButton").onClick( (event) => {
+    wixWindow.openModal("https://docs.google.com/document/d/e/2PACX-1vSIpqB3oBISp4Jiwekd7rW5SXITKnZ-wqAs-OOD3t2sUuNPB7_uwHpEWReyXZqYjRM82DmOwnuPcgTY/pub", {"width": 750, "height": 500 })
+   .then(() => { console.log("Modal closed."); } );
+    });
+}
